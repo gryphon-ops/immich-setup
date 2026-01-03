@@ -2,6 +2,10 @@
 
 A Docker Compose setup for [Immich](https://immich.app/) — a self-hosted photo and video management application — integrated with [Tailscale](https://tailscale.com/) for secure remote access.
 
+## Disclaimer
+
+I've only tested this on a mac mini, other systems might run into other error. I made this doc with AI following all my troubleshooting attempts. Hopefully it's useful, but it might have errors. Feel free to contribute updates and fixes if you find any :)
+
 ## Overview
 
 This project automates the deployment of Immich with:
@@ -70,6 +74,66 @@ docker compose up -d
 ```
 
 Services will pull latest images and start automatically.
+
+## Post-Installation Configuration
+
+After services start, several critical configuration steps are required for a fully operational zero open ports deployment.
+
+### 1. Tailscale OAuth & Tag Configuration
+
+If using an OAuth client, define the tag in your Tailscale Access Control List (ACL):
+
+1. Open **Tailscale Admin Console** > **Access Control**
+2. Add `tagOwners` for your tag:
+   ```json
+   "tagOwners": {
+       "tag:container": ["your-admin-email@example.com"]
+   }
+   ```
+3. Go to **Settings** > **OAuth Clients** > **Generate OAuth Client**
+4. Configure:
+   - Scope: `Devices: Write`
+   - Tag: `tag:container` (or your chosen tag)
+5. Copy the **Client Secret** and use it as `TS_AUTHKEY` in your docker-compose.yml
+
+### 2. Disable Key Expiry
+
+By default, Tailscale nodes expire after 180 days. For a persistent server, disable expiry:
+
+1. Go to **Machines** tab in Tailscale Admin Console
+2. Locate your `immich` machine
+3. Click the three dots `...` > **Disable Key Expiry**
+   - *Note: OAuth clients often have this disabled automatically, but verify to be sure*
+
+### 3. Configure Immich Trusted Proxies
+
+Tailscale Funnel acts as a reverse proxy, so Immich needs to trust headers for correct HTTPS handling:
+
+1. Log into Immich as an **Admin**
+2. Go to **Administration** > **Settings** > **Server Settings**
+3. Find **Proxy Settings**
+4. In **Trusted Proxies**, add the Docker internal IP range: `172.18.0.0/16`
+   - Or add the specific Tailscale container IP
+5. Set **External Domain** to `https://immich.your-tailnet.ts.net`
+
+### 4. Verify Tailscale Funnel Status
+
+If the page loads but gets stuck, check Funnel status:
+
+```bash
+docker exec -it tailscale-immich tailscale funnel status
+```
+
+**Important**: Immich must be served at the root `/` of the hostname, not a sub-path. Tailscale Funnel automatically translates port 443 to internal port 2283.
+
+### 5. Mobile App Configuration
+
+To use the Immich mobile app:
+
+1. **Server URL**: Enter `https://immich.your-tailnet.ts.net`
+   - Do NOT include a port number; Funnel handles the translation automatically
+2. **Tailscale on Phone**: Not required if Funnel is enabled, as the app connects via public internet
+3. If Funnel is disabled, enable Tailscale on your phone and connect to your Tailnet first
 
 ## File Structure
 
@@ -143,10 +207,30 @@ See [Immich docs](https://immich.app/docs/install/environment-variables) for all
 - Review logs: `docker compose logs`
 - Verify `.env` exists and `UPLOAD_LOCATION` path is accessible
 
+### Tailscale Container Issues
+
+Run this command to filter errors:
+
+```bash
+docker logs tailscale-immich 2>&1 | grep -iE "error|warn|fatal|forbidden"
+```
+
+**Common errors**:
+- `403 Forbidden`: OAuth client missing `Devices: Write` scope or tag not assigned correctly
+- `Getting OS base config is not supported`: Add `TS_USERSPACE=true` to `docker-compose.yml` environment variables
+
 ### Can't access Immich
-- Confirm Tailscale is authenticated: `docker logs tailscale-immich`
-- Check firewall rules in Tailscale admin console
-- Verify Funnel is enabled if using domain access
+- Confirm Tailscale authentication: `docker logs tailscale-immich`
+- Check Funnel status: `docker exec -it tailscale-immich tailscale funnel status`
+- Verify firewall rules in Tailscale admin console
+- Ensure Trusted Proxies are configured in Immich settings
+- Check that External Domain is set to your Tailscale domain
+
+### Page loads but gets stuck (blank/loading)
+- Verify Funnel is enabled and routing correctly
+- Check browser console for failed requests (F12 > Console)
+- Ensure **no sub-path** is being used; Immich must be at `/`
+- Verify Trusted Proxies include the Docker network range `172.18.0.0/16`
 
 ### Database issues
 - Ensure `DB_DATA_LOCATION` path has appropriate permissions
